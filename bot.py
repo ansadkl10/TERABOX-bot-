@@ -4,7 +4,7 @@ import telebot
 from flask import Flask
 from threading import Thread
 
-# ENV settings - Bot Token mathram mathi
+# ENV settings
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 KOYEB_API_URL = os.environ.get("API_URL", "https://top-warbler-brofbdb699965-a3727b0a.koyeb.app/bypass")
 
@@ -24,15 +24,15 @@ def keep_alive():
 
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
-    bot.reply_to(message, "Hello! Terabox link ayakkuka. 400MB-yil thazhe aanel file ayachu tharaam, illenkil direct link nalkaam.")
+    bot.reply_to(message, "👋 Hello! Terabox link ayakkuka.\n\n✅ 400MB-yil thazhe ulla video direct ayachu tharaam.\n✅ Athil kooduthal aanel direct download link nalkaam.")
 
 @bot.message_handler(func=lambda message: "terabox" in message.text or "1024tera" in message.text)
 def handle_terabox(message):
-    sent_msg = bot.reply_to(message, "🔍 Processing...")
+    sent_msg = bot.reply_to(message, "🔍 Processing your link...")
     url = message.text
 
     try:
-        # API Call
+        # Calling your Koyeb API
         response = requests.get(f"{KOYEB_API_URL}?url={url}")
         data = response.json()
 
@@ -46,7 +46,7 @@ def handle_terabox(message):
             # --- CONDITION: 400MB LIMIT ---
             if size_mb > 400:
                 caption = (
-                    f"⚠️ **File is too large for direct send!**\n\n"
+                    f"⚠️ **File is too large (400MB+)!**\n\n"
                     f"📁 **Name:** `{file_name}`\n"
                     f"📊 **Size:** {size_mb} MB\n\n"
                     f"🔗 [Direct Download Link]({direct_link})"
@@ -54,28 +54,43 @@ def handle_terabox(message):
                 bot.edit_message_text(caption, message.chat.id, sent_msg.message_id, parse_mode="Markdown")
             
             else:
-                bot.edit_message_text(f"📥 Downloading: `{file_name}` ({size_mb} MB)", message.chat.id, sent_msg.message_id)
+                bot.edit_message_text(f"📥 Downloading: `{file_name}`\n📊 Size: {size_mb} MB", message.chat.id, sent_msg.message_id)
                 
-                # Download to Disk
+                # Streaming Download to Disk
                 with requests.get(direct_link, stream=True) as r:
                     r.raise_for_status()
                     with open(file_name, 'wb') as f:
                         for chunk in r.iter_content(chunk_size=8192):
                             f.write(chunk)
 
-                bot.edit_message_text("📤 Uploading to Telegram...", message.chat.id, sent_msg.message_id)
+                bot.edit_message_text("📤 Uploading as Video...", message.chat.id, sent_msg.message_id)
                 
-                # Uploading File
+                # Video Extensions Check
+                video_exts = ['.mp4', '.mkv', '.mov', '.avi', '.webm']
+                is_video = any(file_name.lower().endswith(ext) for ext in video_exts)
+
                 with open(file_name, 'rb') as f:
-                    bot.send_document(message.chat.id, f, caption=f"✅ **File:** `{file_name}`\n📊 **Size:** {size_mb} MB")
+                    if is_video:
+                        bot.send_video(
+                            message.chat.id, 
+                            f, 
+                            caption=f"✅ **Video:** `{file_name}`\n📊 **Size:** {size_mb} MB",
+                            supports_streaming=True
+                        )
+                    else:
+                        bot.send_document(
+                            message.chat.id, 
+                            f, 
+                            caption=f"✅ **File:** `{file_name}`\n📊 **Size:** {size_mb} MB"
+                        )
                 
-                # Cleanup
+                # Cleanup local file
                 if os.path.exists(file_name):
                     os.remove(file_name)
                 bot.delete_message(message.chat.id, sent_msg.message_id)
 
         else:
-            bot.edit_message_text("❌ Error: Bypass failed.", message.chat.id, sent_msg.message_id)
+            bot.edit_message_text("❌ Error: Link bypass cheyyan pattiyilla.", message.chat.id, sent_msg.message_id)
 
     except Exception as e:
         if 'file_name' in locals() and os.path.exists(file_name):
@@ -84,8 +99,8 @@ def handle_terabox(message):
 
 if __name__ == "__main__":
     if not BOT_TOKEN:
-        print("Error: BOT_TOKEN ENV set cheythittilla!")
+        print("Error: BOT_TOKEN is missing in Environment Variables!")
     else:
         keep_alive()
-        print("Bot started!")
+        print("Bot is alive and polling...")
         bot.infinity_polling()
