@@ -1,57 +1,82 @@
-import os
-import telebot
-import requests
-from flask import Flask
-from threading import Thread
+const { Telegraf } = require('telegraf');
+const axios = require('axios');
+const fs = require('fs-extra');
+const express = require('express');
+const path = require('path');
 
-# ENV-ൽ നിന്ന് ഡാറ്റ എടുക്കുന്നു
-BOT_TOKEN = os.environ.get("BOT_TOKEN")
-KOYEB_API_URL = os.environ.get("API_URL", "https://top-warbler-brofbdb699965-a3727b0a.koyeb.app/bypass")
+// ENV Variables
+const BOT_TOKEN = process.env.BOT_TOKEN;
+const KOYEB_API_URL = process.env.API_URL || "https://top-warbler-brofbdb699965-a3727b0a.koyeb.app/bypass";
 
-bot = telebot.TeleBot(BOT_TOKEN)
-server = Flask('')
+const bot = new Telegraf(BOT_TOKEN);
+const app = express();
 
-@server.route('/')
-def home():
-    return "Bot is Alive!"
+// Render Health Check
+app.get('/', (req, res) => res.send('Bot is Running!'));
+app.listen(process.env.PORT || 8080);
 
-def run():
-    server.run(host='0.0.0.0', port=8080)
+bot.start((ctx) => ctx.reply('ഹലോ! Terabox ലിങ്ക് അയക്കൂ, ഞാൻ ഫയൽ നേരിട്ട് അയച്ചു തരാം.'));
 
-def keep_alive():
-    t = Thread(target=run)
-    t.start()
+bot.on('text', async (ctx) => {
+    const url = ctx.message.text;
+    if (!url.includes('terabox') && !url.includes('1024tera')) return;
 
-@bot.message_handler(commands=['start'])
-def send_welcome(message):
-    bot.reply_to(message, "Hello! Terabox link അയച്ചു തരൂ, ഞാൻ bypass ചെയ്ത് തരാം.")
+    const statusMsg = await ctx.reply('🔍 പ്രോസസ്സ് ചെയ്യുന്നു...');
 
-@bot.message_handler(func=lambda message: "terabox" in message.text or "1024tera" in message.text)
-def handle_terabox(message):
-    sent_msg = bot.reply_to(message, "Processing... Please wait.")
-    url = message.text
+    try {
+        // API Call
+        const response = await axios.get(`${KOYEB_API_URL}?url=${url}`);
+        const data = response.data;
 
-    try:
-        response = requests.get(f"{KOYEB_API_URL}?url={url}")
-        data = response.json()
+        if (data.status) {
+            const fileInfo = data.result.list[0];
+            const fileName = fileInfo.server_filename;
+            const directLink = fileInfo.direct_link;
+            const fileSizeMB = (fileInfo.size / (1024 * 1024)).toFixed(2);
 
-        if data.get("status") == True:
-            file_info = data["result"]["list"][0]
-            file_name = file_info["server_filename"]
-            direct_link = file_info["direct_link"]
-            
-            caption = f"✅ **File Found!**\n\n**Name:** `{file_name}`\n\n[Click here to Download]({direct_link})"
-            bot.edit_message_text(caption, message.chat.id, sent_msg.message_id, parse_mode="Markdown")
-        else:
-            bot.edit_message_text("Sorry, link bypass ചെയ്യാൻ പറ്റിയില്ല.", message.chat.id, sent_msg.message_id)
-    except Exception as e:
-        bot.edit_message_text(f"Error: {str(e)}", message.chat.id, sent_msg.message_id)
+            await ctx.telegram.editMessageText(ctx.chat.id, statusMsg.message_id, null, `📥 ഡൗൺലോഡ് ചെയ്യുന്നു: ${fileName} (${fileSizeMB} MB)`);
 
-# പ്രധാനപ്പെട്ട ഭാഗം: ഇവിടെയാണ് ബോട്ട് സ്റ്റാർട്ട് ചെയ്യുന്നത്
-if __name__ == "__main__":
-    if not BOT_TOKEN:
-        print("Error: BOT_TOKEN env variable set ചെയ്തിട്ടില്ല!")
-    else:
-        keep_alive() # ഇപ്പോൾ ഈ ഫങ്ക്ഷൻ മുകളിൽ ഉള്ളതുകൊണ്ട് Error വരില്ല
-        print("Bot is running...")
-        bot.infinity_polling()
+            const filePath = path.join(__dirname, fileName);
+
+            // File Downloading
+            const writer = fs.createWriteStream(filePath);
+            const fileStream = await axios({
+                method: 'get',
+                url: directLink,
+                responseType: 'stream'
+            });
+
+            fileStream.data.pipe(writer);
+
+            writer.on('finish', async () => {
+                await ctx.telegram.editMessageText(ctx.chat.id, statusMsg.message_id, null, `📤 ടെലഗ്രാമിലേക്ക് അപ്‌ലോഡ് ചെയ്യുന്നു...`);
+                
+                try {
+                    await ctx.replyWithDocument({ source: filePath, filename: fileName }, {
+                        caption: `✅ **File:** \`${fileName}\` \n📊 **Size:** ${fileSizeMB} MB`,
+                        parse_mode: 'Markdown'
+                    });
+                    // Cleanup
+                    await fs.remove(filePath);
+                    await ctx.telegram.deleteMessage(ctx.chat.id, statusMsg.message_id);
+                } catch (uploadError) {
+                    ctx.reply(`അപ്‌ലോഡ് പരാജയപ്പെട്ടു: ${uploadError.message}`);
+                    await fs.remove(filePath);
+                }
+            });
+
+            writer.on('error', (err) => {
+                ctx.reply(`ഡൗൺലോഡ് എറർ: ${err.message}`);
+                fs.remove(filePath);
+            });
+
+        } else {
+            ctx.reply('ക്ഷമിക്കണം, ലിങ്ക് ബൈപാസ് ചെയ്യാൻ കഴിഞ്ഞില്ല.');
+        }
+    } catch (error) {
+        ctx.reply(`എറർ: ${error.message}`);
+    }
+});
+
+bot.launch();
+console.log("Bot Started...");
