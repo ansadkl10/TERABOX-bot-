@@ -1,16 +1,14 @@
 import os
 import requests
-from pyrogram import Client, filters
+import telebot
 from flask import Flask
 from threading import Thread
 
-# ENV settings
+# ENV settings - Bot Token mathram mathi
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
-API_ID = int(os.environ.get("API_ID"))
-API_HASH = os.environ.get("API_HASH")
 KOYEB_API_URL = os.environ.get("API_URL", "https://top-warbler-brofbdb699965-a3727b0a.koyeb.app/bypass")
 
-app = Client("terabox_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
+bot = telebot.TeleBot(BOT_TOKEN)
 server = Flask('')
 
 @server.route('/')
@@ -24,21 +22,21 @@ def keep_alive():
     t = Thread(target=run)
     t.start()
 
-@app.on_message(filters.command("start"))
-async def start(client, message):
-    await message.reply_text("Hello! Terabox link ayakkuka. 400MB-yil thazhe aanel file ayachu tharaam, illenkil direct link nalkaam.")
+@bot.message_handler(commands=['start'])
+def send_welcome(message):
+    bot.reply_to(message, "Hello! Terabox link ayakkuka. 400MB-yil thazhe aanel file ayachu tharaam, illenkil direct link nalkaam.")
 
-@app.on_message(filters.regex(r'https?://.*terabox.*|https?://.*1024tera.*'))
-async def handle_link(client, message):
-    msg = await message.reply_text("🔍 Processing...")
-    terabox_url = message.text
+@bot.message_handler(func=lambda message: "terabox" in message.text or "1024tera" in message.text)
+def handle_terabox(message):
+    sent_msg = bot.reply_to(message, "🔍 Processing...")
+    url = message.text
 
     try:
-        # API Call to Koyeb
-        response = requests.get(f"{KOYEB_API_URL}?url={terabox_url}")
+        # API Call
+        response = requests.get(f"{KOYEB_API_URL}?url={url}")
         data = response.json()
 
-        if data.get("status"):
+        if data.get("status") == True:
             file_info = data["result"]["list"][0]
             file_name = file_info["server_filename"]
             direct_link = file_info["direct_link"]
@@ -53,37 +51,41 @@ async def handle_link(client, message):
                     f"📊 **Size:** {size_mb} MB\n\n"
                     f"🔗 [Direct Download Link]({direct_link})"
                 )
-                await msg.edit_text(caption)
+                bot.edit_message_text(caption, message.chat.id, sent_msg.message_id, parse_mode="Markdown")
             
             else:
-                await msg.edit_text(f"📥 Downloading: `{file_name}` ({size_mb} MB)")
+                bot.edit_message_text(f"📥 Downloading: `{file_name}` ({size_mb} MB)", message.chat.id, sent_msg.message_id)
                 
-                # Streaming Download to Disk
+                # Download to Disk
                 with requests.get(direct_link, stream=True) as r:
+                    r.raise_for_status()
                     with open(file_name, 'wb') as f:
                         for chunk in r.iter_content(chunk_size=8192):
                             f.write(chunk)
 
-                await msg.edit_text("📤 Uploading to Telegram...")
-                await message.reply_document(
-                    document=file_name,
-                    caption=f"✅ **File:** `{file_name}`\n📊 **Size:** {size_mb} MB"
-                )
+                bot.edit_message_text("📤 Uploading to Telegram...", message.chat.id, sent_msg.message_id)
+                
+                # Uploading File
+                with open(file_name, 'rb') as f:
+                    bot.send_document(message.chat.id, f, caption=f"✅ **File:** `{file_name}`\n📊 **Size:** {size_mb} MB")
                 
                 # Cleanup
                 if os.path.exists(file_name):
                     os.remove(file_name)
-                await msg.delete()
+                bot.delete_message(message.chat.id, sent_msg.message_id)
 
         else:
-            await msg.edit_text("❌ Error: Bypass failed.")
+            bot.edit_message_text("❌ Error: Bypass failed.", message.chat.id, sent_msg.message_id)
 
     except Exception as e:
         if 'file_name' in locals() and os.path.exists(file_name):
             os.remove(file_name)
-        await msg.edit_text(f"❌ Error: {str(e)}")
+        bot.edit_message_text(f"❌ Error: {str(e)}", message.chat.id, sent_msg.message_id)
 
 if __name__ == "__main__":
-    keep_alive()
-    print("Bot started!")
-    app.run()
+    if not BOT_TOKEN:
+        print("Error: BOT_TOKEN ENV set cheythittilla!")
+    else:
+        keep_alive()
+        print("Bot started!")
+        bot.infinity_polling()
